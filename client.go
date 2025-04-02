@@ -106,5 +106,5 @@ func doRequest(ctx context.Context, url string, lastKnownVersion string) (data [
 		return nil, "", err
 	}
 
-	return data, lastKnownVersion, nil
+	return data, version, nil
 }
