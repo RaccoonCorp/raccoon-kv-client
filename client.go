@@ -97,6 +97,10 @@ func doRequest(ctx context.Context, url string, lastKnownVersion string) (data [
 		return nil, version, nil
 	}
 
+	if response.StatusCode == http.StatusNotModified {
+		return nil, lastKnownVersion, nil
+	}
+
 	if response.StatusCode != http.StatusOK {
 		return nil, "", fmt.Errorf("unexpected status code %d%w", response.StatusCode, RequestFailedErr)
 	}
