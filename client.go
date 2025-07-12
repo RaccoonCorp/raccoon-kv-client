@@ -18,29 +18,33 @@ type Client struct {
 var RequestFailedErr = errors.New("")
 
 func (c *Client) Get(ctx context.Context, key string) (data []byte, version string, err error) {
-	return doRequest(ctx, fmt.Sprintf("%s/kv/%s", c.Url, key), "")
+	return doRequest(ctx, fmt.Sprintf("%s/kv/%s", c.Url, key), "", time.Second*10)
 }
 
 func (c *Client) Watch(ctx context.Context, key string, cb func([]byte)) {
 	var lastVersion string
 
-	requestUrl := fmt.Sprintf("%s/kv/%s?watch=%d", c.Url, key, 60)
+	const duration = 60
+
+	requestUrl := fmt.Sprintf("%s/kv/%s?watch=%d", c.Url, key, duration)
 
 	backoffSeconds := 1
 
 	for {
-		data, version, err := doRequest(ctx, requestUrl, lastVersion)
+		data, version, err := doRequest(ctx, requestUrl, lastVersion, time.Second*duration)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				slog.Info("context deadline exceeded, stopping watch")
-				return
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				slog.Info("internal http client timeout, retrying")
+				continue
 			}
 
-			slog.Error("failed to query kv store, backing off", slog.String("err", err.Error()), slog.Int("backoff_seconds", backoffSeconds))
+			if ctx.Err() == nil {
+				slog.Error("failed to query kv store, backing off", slog.String("err", err.Error()), slog.Int("backoff_seconds", backoffSeconds))
+			}
 
 			select {
 			case <-ctx.Done():
-				slog.Info("context deadline exceeded, stopping watch")
+				slog.Info("context cancelled or deadline exceeded, stopping watch")
 				return
 			case <-time.NewTimer(time.Second * time.Duration(backoffSeconds)).C:
 			}
@@ -73,7 +77,7 @@ func (c *Client) Put(ctx context.Context, key string, data []byte) error {
 	return nil
 }
 
-func doRequest(ctx context.Context, url string, lastKnownVersion string) (data []byte, version string, err error) {
+func doRequest(ctx context.Context, url string, lastKnownVersion string, timeout time.Duration) (data []byte, version string, err error) {
 	request, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, "", err
@@ -83,7 +87,11 @@ func doRequest(ctx context.Context, url string, lastKnownVersion string) (data [
 		request.Header.Set("if-none-match", lastKnownVersion)
 	}
 
-	response, err := http.DefaultClient.Do(request)
+	client := http.Client{
+		Timeout: timeout,
+	}
+
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, "", err
 	}
